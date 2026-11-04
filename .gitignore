@@ -1,0 +1,10 @@
+# Datos personales y claves: nunca al repo
+forja-respaldo*.json
+*.zip
+.env
+.env.*
+supabase/.temp/
+
+# Cosas locales
+.claude/
+.DS_Store
