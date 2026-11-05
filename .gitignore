@@ -12,3 +12,6 @@ supabase/.temp/
 # Intermedio de ./src/build.sh y temporales del CLI
 src/app.js
 **/supabase/.temp/
+
+# Datos de mi proyecto (ref de Supabase, comandos): no van al repo
+CLAUDE.local.md
