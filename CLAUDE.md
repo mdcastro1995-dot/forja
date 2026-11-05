@@ -12,7 +12,7 @@ App de gimnasio (PWA) publicada en https://mdcastro1995-dot.github.io/forja/ des
 
 ## Datos (Supabase, proyecto "forja", ref `jwwsbmutqdfvirxuugtg`)
 
-- Acceso desde la Mac: `npx -y supabase@latest db query --remote=jwwsbmutqdfvirxuugtg "<sql>"` (agregá `--read-only` para consultas).
+- Acceso desde la Mac: `npx -y supabase@latest db query --remote=jwwsbmutqdfvirxuugtg "<sql>"` (agregá `--read-only` para consultas; para escribir, el CLI pide `--yes`, que se pasa solo después de mi OK).
 - Todo está en la tabla `public.forja_docs` (`user_id`, `path`, `parent`, `data` jsonb, `updated_at`). Hay un solo usuario.
 - Rutas, donde `<uid>` es el `user_id`:
   - `data/users/<uid>/profile` → rutinas (`routines[].slots[]` con `ex[]` = ids de ejercicios, `sets`, `rmin`, `rmax`, `rest`, `rot`), `settings`, `injury {area, side, since, status}` (`side`: `"der"` | `"izq"` | null), `height` (cm), `custom` (ejercicios propios), `exNotes`, `plan`
