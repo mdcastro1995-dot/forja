@@ -8,3 +8,7 @@ supabase/.temp/
 # Cosas locales
 .claude/
 .DS_Store
+
+# Intermedio de ./src/build.sh y temporales del CLI
+src/app.js
+**/supabase/.temp/

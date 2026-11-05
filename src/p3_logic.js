@@ -154,13 +154,30 @@ function suggest(exId, rg, idx, st) {
 }
 
 /* ========== rotation ========== */
-function nextRoutine(profile, workouts) {
+/* Qué rutina toca: la que hace más que no hacés, salteando las que cargan músculos
+   que todavía se recuperan (por ejemplo, si ayer entrenaste espalda por tu cuenta). */
+function routineMuscles(r) {
+  const ms = {};
+  for (const sl of r.slots) { const d = getEx(sl.ex[sl.idx % sl.ex.length]); if (d.m === 'cardio') continue; ms[d.m] = (ms[d.m] || 0) + (sl.sets || 1); }
+  return ms;
+}
+function rankRoutines(profile, workouts, now) {
+  now = now || Date.now();
   const rot = profile.routines.filter(r => r.inRot !== false);
-  if (!rot.length) return null;
-  const last = workouts.find(w => w.routineId && rot.some(r => r.id === w.routineId));
-  if (!last) return rot[0];
-  const i = rot.findIndex(r => r.id === last.routineId);
-  return rot[(i + 1) % rot.length];
+  const rec = recovery(workouts, now);
+  const lastAt = {};
+  for (const w of workouts) if (w.routineId && lastAt[w.routineId] == null) lastAt[w.routineId] = w.start;
+  return rot.map((r, i) => {
+    const ms = routineMuscles(r);
+    let t = 0, n = 0, tired = [];
+    for (const m in ms) { if (rec[m] == null) continue; t += rec[m] * ms[m]; n += ms[m]; if (rec[m] < 60) tired.push(m); }
+    const ready = n ? Math.round(t / n) : 100;
+    return { r, i, ready, ok: ready >= 70, tired, last: lastAt[r.id] || null };
+  }).sort((a, b) => (b.ok - a.ok) || ((a.last || 0) - (b.last || 0)) || (a.i - b.i));
+}
+function nextRoutine(profile, workouts) {
+  const rk = rankRoutines(profile, workouts);
+  return rk.length ? rk[0].r : null;
 }
 function advanceSlots(profile, routineId, a) {
   const r = profile.routines.find(x => x.id === routineId);

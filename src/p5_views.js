@@ -26,14 +26,13 @@ function NextCard({ s, idx }) {
   const [pick, setPick] = useState(null);
   const r = (pick && p.routines.find(x => x.id === pick)) || auto || p.routines[0];
   if (!r) return null;
-  const rot = p.routines.filter(x => x.inRot !== false);
-  const pos = rot.findIndex(x => x.id === r.id);
-  const cycle = () => { const i = p.routines.findIndex(x => x.id === r.id); setPick(p.routines[(i + 1) % p.routines.length].id); };
+  const last = s.workouts.find(w => w.routineId === r.id);
   const st = p.settings;
+  const choose = () => openSheet('routinePick', { cur: r.id, onPick: (id) => setPick(id === (auto && auto.id) ? null : id) });
   return html`<section class="next" aria-label="Próximo entrenamiento">
     <${PlateDeco} />
     <div>
-      <span class="eyebrow">${auto && r.id === auto.id ? 'Te toca' : 'Elegiste'} · ${pos >= 0 ? `rotación ${pos + 1} de ${rot.length}` : 'fuera de rotación'}</span>
+      <span class="eyebrow">${auto && r.id === auto.id ? 'Te toca' : 'Elegiste'} · ${last ? 'la hiciste ' + ago(last.start) : 'todavía no la hiciste'}</span>
       <h2 class="display">${r.name}</h2>
       <span class="next-sub">${r.slots.length} ejercicios · unos ${estMinutes(r)} min</span>
     </div>
@@ -41,7 +40,8 @@ function NextCard({ s, idx }) {
       return html`<li key=${sl.id}><span class="nm">${def.n}${sl.ex.length > 1 && sl.rot > 0 ? html`<${Icon} n="swap" />` : null}</span><span class="meta">${sl.sets}×${rangeTxt(sl, def)}${sug && sug.w ? ' · ' + fKg(sug.w) : ''}</span></li>`; })}</ol>
     <div class="next-actions">
       <button class="btn light" onClick=${() => startRoutine(r)}><${Icon} n="play" fill />Empezar</button>
-      ${p.routines.length > 1 ? html`<button class="btn outline-light" onClick=${cycle}>Otra rutina<${Icon} n="chevR" /></button>` : null}
+      <button class="btn outline-light" onClick=${() => openSheet('quickDone', { rid: r.id, onDone: () => setPick(null) })}><${Icon} n="check" />Ya la hice</button>
+      ${p.routines.length > 1 ? html`<button class="btn ghost next-pick" onClick=${choose}><${Icon} n="list" />Elegir otro día</button>` : null}
     </div>
   </section>`;
 }

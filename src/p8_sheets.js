@@ -312,7 +312,84 @@ function CoachSheet({ s, mode, close }) {
 }
 
 /* ========== app ========== */
-const SHEETS = { photo: PhotoSheet, day: DaySheet, confirm: ConfirmSheet, picker: PickerSheet, finish: FinishSheet, detail: DetailSheet, smart: SmartSheet, programs: ProgramsSheet, routine: RoutineEditor, exMenu: ExMenuSheet, setMenu: SetMenuSheet, restPick: RestPickSheet, exInfo: ExInfoSheet, exportText: ExportTextSheet, coach: CoachSheet };
+function RoutinePickSheet({ cur, onPick, s, close }) {
+  const rk = rankRoutines(s.profile, s.workouts);
+  const inRot = new Set(rk.map(x => x.r.id));
+  const off = s.profile.routines.filter(r => !inRot.has(r.id));
+  const row = (r, x, k) => html`<button key=${r.id} aria-pressed=${r.id === cur} onClick=${() => { close(); onPick(r.id); }}>
+    <span class="grow rp-row"><b>${r.name}${k === 0 ? html` <span class="pill">Recomendada</span>` : null}</b>
+    <small>${x && x.last ? 'La hiciste ' + ago(x.last) : x ? 'Todavía no la hiciste' : 'Fuera de la rotación'}${x && x.tired.length ? ' · ' + x.tired.map(m => MUSCLES[m].toLowerCase()).join(', ') + ' todavía se ' + plural(x.tired.length, 'recupera', 'recuperan') : ''}</small></span>
+    ${r.id === cur ? html`<${Icon} n="check" />` : html`<${Icon} n="chevR" />`}</button>`;
+  return html`<${Sheet} title="Elegir día" onClose=${close}>
+    <p class="sheet-p">Primero va la que hace más que no hacés, salteando las que cargan músculos que todavía se recuperan.</p>
+    <div class="menu">${rk.map((x, k) => row(x.r, x, k))}${off.map(r => row(r, null, -1))}</div>
+  <//>`;
+}
+function QuickDoneSheet({ rid, onDone, s, idx, close }) {
+  const p = s.profile, st = p.settings;
+  const r = p.routines.find(x => x.id === rid);
+  const [when, setWhen] = useState('hoy');
+  const [mins, setMins] = useState(() => r ? String(estMinutes(r)) : '60');
+  const [feel, setFeel] = useState(null);
+  const [note, setNote] = useState('');
+  const [rows, setRows] = useState(() => r ? r.slots.map(sl => {
+    const exId = sl.ex[sl.idx % sl.ex.length], def = getEx(exId), sug = suggest(exId, sl, idx, st) || {};
+    return { slot: sl.id, id: exId, on: true, n: String(sl.sets), w: sug.w ? toStr(sug.w) : '', r: String(sug.r || sug.s || sl.rmin), m: String(sl.rmin) };
+  }) : []);
+  if (!r) return null;
+  const upd = (k, f, v) => setRows(rs => rs.map((x, j) => j === k ? Object.assign({}, x, { [f]: v }) : x));
+  const save = () => {
+    const dur = Math.round(num(mins) || 0);
+    if (dur <= 0) { toast('Anotá cuántos minutos duró.', 'warn'); return; }
+    const on = rows.filter(x => x.on);
+    if (!on.length) { toast('Marcá al menos un ejercicio.', 'warn'); return; }
+    const ex = [];
+    for (const x of on) {
+      const def = getEx(x.id), n = clamp(Math.round(num(x.n) || 1), 1, 20);
+      let set1;
+      if (def.t === 'cardio') { const m = num(x.m); if (!m) { toast(`Anotá los minutos de ${def.n}.`, 'warn'); return; } ex.push({ id: x.id, n: def.n, slot: x.slot, note: '', ss: false, sets: [{ t: 'n', m, d: 0 }] }); continue; }
+      if (def.t === 'time') set1 = { t: 'n', s: Math.round(num(x.r) || 0) };
+      else {
+        const w = num(x.w), rp = Math.round(num(x.r) || 0);
+        if (!rp) { toast(`Anotá las reps de ${def.n}.`, 'warn'); return; }
+        if (def.t === 'wr' && w == null) { toast(`Anotá el peso de ${def.n} o destildalo.`, 'warn'); return; }
+        set1 = { t: 'n', w: Math.max(0, w || 0), r: rp };
+      }
+      ex.push({ id: x.id, n: def.n, slot: x.slot, note: '', ss: false, sets: Array.from({ length: n }, () => Object.assign({}, set1)) });
+    }
+    const end = when === 'hoy' ? Date.now() : Date.now() - DAY;
+    const w = { id: uid(), name: r.name, routineId: r.id, start: end - dur * 60000, end, dur: dur * 60, ex, note: note.trim().slice(0, 2000), feel };
+    const wst = workoutStats(w); w.vol = Math.round(wst.vol); w.nsets = wst.sets;
+    A.putWorkout(w);
+    A.profile(q => advanceSlots(q, r.id, { ex: ex.map(e => ({ id: e.id, slot: e.slot, sets: [{ done: true }] })) }));
+    close();
+    if (onDone) onDone();
+    toast(`Guardado: ${r.name} · ${dur} min`);
+  };
+  const FEEL = ['Muy duro', 'Duro', 'Normal', 'Bien', 'Excelente'];
+  const inp = (k, f, aria, w) => html`<input class="inp" style=${w ? `width:${w}px` : ''} inputmode="decimal" aria-label=${aria} value=${rows[k][f]} onInput=${e => upd(k, f, e.target.value)} />`;
+  return html`<${Sheet} title="Ya la hice" onClose=${close} full footer=${html`<button class="btn" onClick=${close}>Cancelar</button><button class="btn primary" onClick=${save}><${Icon} n="check" />Guardar</button>`}>
+    <p class="muted">${r.name}. Ajustá solo lo que haya cambiado.</p>
+    <div class="grid2">
+      <div class="field"><span class="lbl">Cuándo</span><div class="seg" role="group" aria-label="Cuándo">${[['hoy', 'Hoy'], ['ayer', 'Ayer']].map(([k, l]) => html`<button key=${k} aria-pressed=${when === k} onClick=${() => setWhen(k)}>${l}</button>`)}</div></div>
+      <label class="field"><span class="lbl">Duración (min)</span><input id="qd-min" class="input" inputmode="numeric" value=${mins} onInput=${e => setMins(e.target.value)} /></label>
+    </div>
+    <div class="stack" style="gap:8px">
+      <span class="eyebrow">Qué hiciste</span>
+      ${rows.map((x, k) => { const def = getEx(x.id); return html`<div key=${x.slot} class=${'qd-row' + (x.on ? '' : ' off')}>
+        <button class="chk" aria-pressed=${x.on} aria-label=${(x.on ? 'Quitar ' : 'Incluir ') + def.n} onClick=${() => upd(k, 'on', !x.on)}><${Icon} n="check" bold /></button>
+        <div class="grow qd-main"><span class="qd-name">${def.n}</span>
+          ${x.on ? html`<div class="qd-vals">${def.t === 'cardio' ? html`${inp(k, 'm', 'Minutos de ' + def.n, 64)}<span>min</span>`
+            : def.t === 'time' ? html`${inp(k, 'n', 'Series de ' + def.n, 44)}<span>×</span>${inp(k, 'r', 'Segundos de ' + def.n, 58)}<span>s</span>`
+            : html`${inp(k, 'n', 'Series de ' + def.n, 44)}<span>×</span>${inp(k, 'w', (def.t === 'bw' ? 'Lastre' : 'Peso') + ' de ' + def.n, 64)}<span>kg ×</span>${inp(k, 'r', 'Reps de ' + def.n, 48)}<span>reps</span>`}</div>` : html`<span class="sm muted">No lo hiciste</span>`}
+        </div></div>`; })}
+    </div>
+    <div class="field"><span class="lbl">¿Cómo te sentiste?</span>
+      <div class="feel" role="group" aria-label="Sensación">${FEEL.map((l, i) => html`<button key=${i} aria-pressed=${feel === i + 1} onClick=${() => setFeel(feel === i + 1 ? null : i + 1)}>${i + 1}<small>${l}</small></button>`)}</div></div>
+    <label class="field"><span class="lbl">Notas</span><textarea id="qd-note" class="input" placeholder="Molestias, qué cambiaste… (podés dictar con el micrófono del teclado)" value=${note} onInput=${e => setNote(e.target.value)}></textarea></label>
+  <//>`;
+}
+const SHEETS = { photo: PhotoSheet, day: DaySheet, confirm: ConfirmSheet, picker: PickerSheet, finish: FinishSheet, detail: DetailSheet, smart: SmartSheet, programs: ProgramsSheet, routine: RoutineEditor, exMenu: ExMenuSheet, setMenu: SetMenuSheet, restPick: RestPickSheet, exInfo: ExInfoSheet, routinePick: RoutinePickSheet, quickDone: QuickDoneSheet, exportText: ExportTextSheet, coach: CoachSheet };
 const TABS = [['hoy', 'Hoy', 'plate'], ['rutinas', 'Rutinas', 'list'], ['progreso', 'Progreso', 'trend'], ['historial', 'Historial', 'clock'], ['mas', 'Más', 'sliders']];
 function SyncBadge({ s }) {
   const map = { loading: ['local', 'Conectando…'], ok: ['', 'Guardado'], saving: ['saving', 'Guardando…'], error: ['error', 'Sin conexión'], local: ['local', 'Solo este dispositivo'], memory: ['error', 'Sin guardar'], idle: ['local', '…'] };

@@ -555,6 +555,20 @@ main.view { padding-block: 6px 170px; gap: 22px; }
 .inj-chip { background: var(--warn-soft); border-radius: 16px; }
 .inj-dot { background: var(--m-fatigued); box-shadow: 0 0 0 4px var(--warn-soft); }
 @media (prefers-reduced-motion: reduce) { .rehab-ring, .ring-arc { animation: none; } }
+/* elegir día y registro rápido */
+.next .btn.next-pick { color: var(--accent-fg); width: 100%; }
+.rp-row b { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 15px; }
+.rp-row small { display: block; color: var(--ink-3); font-size: 13px; font-weight: 500; margin-top: 2px; }
+.menu button .rp-row { padding: 9px 0; }
+.qd-row { display: flex; gap: 10px; align-items: flex-start; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 10px; }
+.qd-row .chk { flex: none; }
+.qd-row .chk[aria-pressed="true"] { background: var(--good); border-color: var(--good); color: var(--good-ink); }
+.qd-row.off { background: transparent; }
+.qd-row.off .qd-name { color: var(--ink-3); }
+.qd-main { display: flex; flex-direction: column; gap: 6px; }
+.qd-name { font-weight: 700; font-size: 15px; line-height: 1.25; padding-top: 2px; }
+.qd-vals { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 13px; color: var(--ink-3); font-weight: 600; }
+.qd-vals .inp { height: 36px; }
 </style>
 <div id="app"><div class="boot"><div class="boot-in"><svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="15" fill="var(--accent)"/><circle cx="16" cy="16" r="10" fill="none" stroke="var(--on-accent-line)" stroke-width="2"/><circle cx="16" cy="16" r="3.6" fill="var(--surface)"/></svg><p id="boot-msg">Cargando tus entrenamientos…</p></div></div></div>
 <script src="https://cdn.jsdelivr.net/npm/htm@3.1.1/preact/standalone.umd.js"></script>

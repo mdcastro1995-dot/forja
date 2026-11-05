@@ -677,13 +677,30 @@ function suggest(exId, rg, idx, st) {
 }
 
 /* ========== rotation ========== */
-function nextRoutine(profile, workouts) {
+/* Qué rutina toca: la que hace más que no hacés, salteando las que cargan músculos
+   que todavía se recuperan (por ejemplo, si ayer entrenaste espalda por tu cuenta). */
+function routineMuscles(r) {
+  const ms = {};
+  for (const sl of r.slots) { const d = getEx(sl.ex[sl.idx % sl.ex.length]); if (d.m === 'cardio') continue; ms[d.m] = (ms[d.m] || 0) + (sl.sets || 1); }
+  return ms;
+}
+function rankRoutines(profile, workouts, now) {
+  now = now || Date.now();
   const rot = profile.routines.filter(r => r.inRot !== false);
-  if (!rot.length) return null;
-  const last = workouts.find(w => w.routineId && rot.some(r => r.id === w.routineId));
-  if (!last) return rot[0];
-  const i = rot.findIndex(r => r.id === last.routineId);
-  return rot[(i + 1) % rot.length];
+  const rec = recovery(workouts, now);
+  const lastAt = {};
+  for (const w of workouts) if (w.routineId && lastAt[w.routineId] == null) lastAt[w.routineId] = w.start;
+  return rot.map((r, i) => {
+    const ms = routineMuscles(r);
+    let t = 0, n = 0, tired = [];
+    for (const m in ms) { if (rec[m] == null) continue; t += rec[m] * ms[m]; n += ms[m]; if (rec[m] < 60) tired.push(m); }
+    const ready = n ? Math.round(t / n) : 100;
+    return { r, i, ready, ok: ready >= 70, tired, last: lastAt[r.id] || null };
+  }).sort((a, b) => (b.ok - a.ok) || ((a.last || 0) - (b.last || 0)) || (a.i - b.i));
+}
+function nextRoutine(profile, workouts) {
+  const rk = rankRoutines(profile, workouts);
+  return rk.length ? rk[0].r : null;
 }
 function advanceSlots(profile, routineId, a) {
   const r = profile.routines.find(x => x.id === routineId);
@@ -1359,14 +1376,13 @@ function NextCard({ s, idx }) {
   const [pick, setPick] = useState(null);
   const r = (pick && p.routines.find(x => x.id === pick)) || auto || p.routines[0];
   if (!r) return null;
-  const rot = p.routines.filter(x => x.inRot !== false);
-  const pos = rot.findIndex(x => x.id === r.id);
-  const cycle = () => { const i = p.routines.findIndex(x => x.id === r.id); setPick(p.routines[(i + 1) % p.routines.length].id); };
+  const last = s.workouts.find(w => w.routineId === r.id);
   const st = p.settings;
+  const choose = () => openSheet('routinePick', { cur: r.id, onPick: (id) => setPick(id === (auto && auto.id) ? null : id) });
   return html`<section class="next" aria-label="Próximo entrenamiento">
     <${PlateDeco} />
     <div>
-      <span class="eyebrow">${auto && r.id === auto.id ? 'Te toca' : 'Elegiste'} · ${pos >= 0 ? `rotación ${pos + 1} de ${rot.length}` : 'fuera de rotación'}</span>
+      <span class="eyebrow">${auto && r.id === auto.id ? 'Te toca' : 'Elegiste'} · ${last ? 'la hiciste ' + ago(last.start) : 'todavía no la hiciste'}</span>
       <h2 class="display">${r.name}</h2>
       <span class="next-sub">${r.slots.length} ejercicios · unos ${estMinutes(r)} min</span>
     </div>
@@ -1374,7 +1390,8 @@ function NextCard({ s, idx }) {
       return html`<li key=${sl.id}><span class="nm">${def.n}${sl.ex.length > 1 && sl.rot > 0 ? html`<${Icon} n="swap" />` : null}</span><span class="meta">${sl.sets}×${rangeTxt(sl, def)}${sug && sug.w ? ' · ' + fKg(sug.w) : ''}</span></li>`; })}</ol>
     <div class="next-actions">
       <button class="btn light" onClick=${() => startRoutine(r)}><${Icon} n="play" fill />Empezar</button>
-      ${p.routines.length > 1 ? html`<button class="btn outline-light" onClick=${cycle}>Otra rutina<${Icon} n="chevR" /></button>` : null}
+      <button class="btn outline-light" onClick=${() => openSheet('quickDone', { rid: r.id, onDone: () => setPick(null) })}><${Icon} n="check" />Ya la hice</button>
+      ${p.routines.length > 1 ? html`<button class="btn ghost next-pick" onClick=${choose}><${Icon} n="list" />Elegir otro día</button>` : null}
     </div>
   </section>`;
 }
@@ -2347,9 +2364,8 @@ function photoPrompt(s, hint, dictated) {
   return head +
     (hint ? `Aclaración del atleta: "${hint.slice(0, 400)}"\n` : '') +
     'Para cada ejercicio elegí el id más parecido de esta lista (id | nombre | músculo | tipo). Si ninguno corresponde de verdad, poné "id": null y completá "musculo" (una de: ' + Object.keys(MUSCLES).join(', ') + ') y "tipo" (wr = peso y reps, bw = peso corporal, time = segundos, cardio = minutos/km).\n' + lib + '\n\n' +
-    'Cada actividad distinta es un ejercicio aparte (por ejemplo "caminata" y "fisioterapia" son dos ejercicios, aunque se nombren juntas). Para cardio o actividades sin peso, poné minutos en "min", kilómetros en "km" y, si dice pasos, la cantidad en "pasos".\n' +
     'Si la foto trae cargas o repeticiones HECHAS (planilla completada), ponelas en "realizado", una entrada por serie. Si es solo lo planificado, dejá "realizado" vacío. Para formatos como AMRAP/EMOM/For time, describilo en "formato" del bloque y repartí los ejercicios igual. No inventes números que no estén en la foto: si no se ven, null.\n' +
-    'Respondé SOLO con JSON:\n{"titulo":"nombre corto","fecha":"AAAA-MM-DD o null","notas":"formato del WOD, rondas, tiempo, observaciones","ejercicios":[{"id":"press_banca","nombre":"texto tal como aparece","musculo":null,"tipo":null,"series":3,"rmin":8,"rmax":10,"descanso":null,"bloque":"A","formato":null,"realizado":[{"kg":60,"reps":10,"seg":null,"min":null,"km":null,"pasos":null}]}]}';
+    'Respondé SOLO con JSON:\n{"titulo":"nombre corto","fecha":"AAAA-MM-DD o null","notas":"formato del WOD, rondas, tiempo, observaciones","ejercicios":[{"id":"press_banca","nombre":"texto tal como aparece","musculo":null,"tipo":null,"series":3,"rmin":8,"rmax":10,"descanso":null,"bloque":"A","formato":null,"realizado":[{"kg":60,"reps":10,"seg":null,"min":null,"km":null}]}]}';
 }
 function cleanPhoto(o) {
   if (!o || !Array.isArray(o.ejercicios)) return null;
@@ -2359,17 +2375,10 @@ function cleanPhoto(o) {
     const name = String(e.nombre || (known ? getEx(known).n : 'Ejercicio')).slice(0, 60);
     const t = known ? getEx(known).t : (KIND_KEYS.includes(e.tipo) ? e.tipo : 'wr');
     const m = known ? getEx(known).m : (MUSCLES[e.musculo] ? e.musculo : 'core');
-    let steps = 0;
-    const done = (Array.isArray(e.realizado) ? e.realizado : []).slice(0, 12).map(x => {
-      const o = { w: num(x && x.kg), r: num(x && x.reps), s: num(x && x.seg), m: num(x && x.min), d: num(x && x.km) };
-      const p = num(x && x.pasos);
-      // Pasos sin km: se estiman a 0,75 m por paso, y la nota del ejercicio lo aclara.
-      if (p && p > 0) { steps += p; if (o.d == null) o.d = Math.round(p * 0.00075 * 10) / 10; }
-      return o;
-    }).filter(x => x.w != null || x.r != null || x.s != null || x.m != null || x.d != null);
+    const done = (Array.isArray(e.realizado) ? e.realizado : []).slice(0, 12).map(x => ({ w: num(x && x.kg), r: num(x && x.reps), s: num(x && x.seg), m: num(x && x.min), d: num(x && x.km) })).filter(x => x.w != null || x.r != null || x.s != null || x.m != null || x.d != null);
     const def = defRange({ t, k: 'c' });
     const rmin = clamp(Math.round(num(e.rmin) || (done[0] && (done[0].r || done[0].s || done[0].m)) || def.rmin), 1, 300);
-    return { key: uid(), id: known, name, t, m, sets: clamp(Math.round(num(e.series) || done.length || 3), 1, 12), rmin, rmax: clamp(Math.round(num(e.rmax) || rmin), rmin, 300), rest: e.descanso ? clamp(Math.round(num(e.descanso) || 90), 20, 360) : null, label: [e.bloque, e.formato].filter(Boolean).join(' · ').slice(0, 40), done, stepsNote: steps ? `${NF1.format(steps)} pasos (km estimados)` : '' };
+    return { key: uid(), id: known, name, t, m, sets: clamp(Math.round(num(e.series) || done.length || 3), 1, 12), rmin, rmax: clamp(Math.round(num(e.rmax) || rmin), rmin, 300), rest: e.descanso ? clamp(Math.round(num(e.descanso) || 90), 20, 360) : null, label: [e.bloque, e.formato].filter(Boolean).join(' · ').slice(0, 40), done };
   }).filter(Boolean);
   if (!items.length) return null;
   const f = typeof o.fecha === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(o.fecha) && o.fecha <= dayKey(Date.now()) ? o.fecha : null;
@@ -2446,30 +2455,12 @@ function PhotoSheet({ s, close, mode }) {
       const sets = it.done.map(x => ({ t: 'n', w: x.w || 0, r: x.r != null ? Math.round(x.r) : undefined, s: x.s != null ? Math.round(x.s) : undefined, m: x.m != null ? x.m : undefined, d: x.d != null ? x.d : undefined }))
         .filter(x => def.t === 'time' ? x.s : def.t === 'cardio' ? (x.m || x.d) : x.r);
       sets.forEach(x => Object.keys(x).forEach(k => x[k] === undefined && delete x[k]));
-      if (sets.length) ex.push({ id: def.id, n: def.n, slot: null, note: [it.label, it.stepsNote].filter(Boolean).join(' · '), ss: false, sets });
+      if (sets.length) ex.push({ id: def.id, n: def.n, slot: null, note: it.label || '', ss: false, sets });
     });
-    if (!ex.length) { toast(voice ? 'No encontré series, minutos ni kilómetros para registrar.' : 'La foto no trae series hechas con repeticiones o tiempos para registrar.', 'warn'); return; }
-    const t0 = keyTime(date) + 6 * 36e5;
-    const src = (voice ? 'Cargado por dictado. ' : 'Cargado desde foto. ') + res.notes;
-    const isCardio = (e) => getEx(e.id).t === 'cardio';
-    const cardioSec = (list) => Math.round(list.reduce((a, e) => a + e.sets.reduce((b, x) => b + (x.m || 0), 0), 0) * 60);
-    const mk = (name, list, start) => {
-      // Si todo es cardio o actividad por minutos, la duración es la suma de esos minutos.
-      const dur = list.every(isCardio) ? cardioSec(list) : 0;
-      const w = { id: uid(), name, routineId: null, start, end: start + dur * 1000, dur, ex: list, note: src.trim(), feel: null };
-      const st = workoutStats(w); w.vol = Math.round(st.vol); w.nsets = st.sets;
-      return w;
-    };
-    // Varias actividades sueltas (caminata, fisio, natación…): una sesión por actividad, una después de la otra.
-    if (ex.length > 1 && ex.every(isCardio)) {
-      let t = t0;
-      const ws = ex.map(e => { const w = mk(e.n, [e], t); t = w.end + 60000; return w; });
-      ws.forEach(w => A.putWorkout(w));
-      close();
-      toast(`Se guardaron ${ws.length} actividades por separado`);
-      return;
-    }
-    const w = mk(res.title, ex, t0);
+    if (!ex.length) { toast('La foto no trae series hechas con repeticiones o tiempos para registrar.', 'warn'); return; }
+    const t = keyTime(date) + 6 * 36e5;
+    const w = { id: uid(), name: res.title, routineId: null, start: t, end: t, dur: 0, ex, note: ('Cargado desde foto. ' + res.notes).trim(), feel: null };
+    const st = workoutStats(w); w.vol = Math.round(st.vol); w.nsets = st.sets;
     A.putWorkout(w);
     close(); openSheet('detail', { id: w.id });
   };
@@ -2491,7 +2482,7 @@ function PhotoSheet({ s, close, mode }) {
       ${res.notes ? html`<p class="sheet-p"><b>Notas:</b> ${res.notes}</p>` : null}
       <div class="menu">${res.items.map(it => html`<div key=${it.key} class="chg">
         <span class="grow"><b>${it.id ? getEx(it.id).n : it.name}</b>
-          <small>${it.id ? (norm(getEx(it.id).n) !== norm(it.name) ? `En la foto: “${it.name}” · ` : '') : 'Nuevo ejercicio propio · '}${it.label ? it.label + ' · ' : ''}${it.sets}×${it.rmin === it.rmax ? it.rmin : it.rmin + '–' + it.rmax}${it.t === 'time' ? ' s' : it.t === 'cardio' ? ' min' : ''}${it.done.length ? ' · hecho: ' + doneTxt(it) : ''}${it.stepsNote ? ' · ' + it.stepsNote : ''}</small></span>
+          <small>${it.id ? (norm(getEx(it.id).n) !== norm(it.name) ? `En la foto: “${it.name}” · ` : '') : 'Nuevo ejercicio propio · '}${it.label ? it.label + ' · ' : ''}${it.sets}×${it.rmin === it.rmax ? it.rmin : it.rmin + '–' + it.rmax}${it.t === 'time' ? ' s' : it.t === 'cardio' ? ' min' : ''}${it.done.length ? ' · hecho: ' + doneTxt(it) : ''}</small></span>
         <button class="icon-btn sm" aria-label=${'Cambiar el ejercicio de ' + it.name} onClick=${() => remap(it)}><${Icon} n="swap" /></button>
         <button class="icon-btn sm" aria-label=${'Quitar ' + it.name} onClick=${() => remove(it.key)}><${Icon} n="x" /></button>
       </div>`)}</div>
@@ -2590,7 +2581,6 @@ function FinishSheet({ s, idx, close }) {
 }
 function DetailSheet({ id, fresh, s, idx, close }) {
   const w = s.workouts.find(x => x.id === id);
-  const [durEd, setDurEd] = useState(null);
   if (!w) return html`<${Sheet} title="Entrenamiento" onClose=${close}><p class="sheet-p">Este entrenamiento ya no existe.</p><//>`;
   const st = workoutStats(w);
   const prs = idx.byW[w.id] || [];
@@ -2600,10 +2590,6 @@ function DetailSheet({ id, fresh, s, idx, close }) {
     <p class="muted">${cap(DF_LONG.format(new Date(w.start)))} · ${DF_TIME.format(new Date(w.start))}${w.example ? ' · dato de ejemplo' : ''}</p>
     <button class="btn" onClick=${() => { close(); openSheet('day', { date: dayKey(w.start) }); }}><${Icon} n="note" />Registrar cómo te fue y ajustar la rutina</button>
     <div class="sum-tiles"><${Tile} label="Duración" value=${fMin(w.dur)} /><${Tile} label="Volumen" value=${fVol(st.vol)} /><${Tile} label="Series" value=${st.sets} /></div>
-    ${durEd == null
-      ? html`<button class="btn ghost sm" style="align-self:flex-start" onClick=${() => setDurEd(w.dur ? String(Math.round(w.dur / 60)) : '')}><${Icon} n="edit" />${w.dur ? 'Cambiar duración' : 'Agregar duración'}</button>`
-      : html`<div class="card stack"><label class="field"><span class="lbl">Duración (minutos)</span><input id="detail-dur" class="input" inputmode="numeric" placeholder="Ej.: 45" value=${durEd} onInput=${e => setDurEd(e.target.value)} /></label>
-        <div class="row"><button class="btn sm" onClick=${() => setDurEd(null)}>Cancelar</button><button class="btn primary sm" onClick=${() => saveDur(w, durEd, () => setDurEd(null))}><${Icon} n="check" />Guardar duración</button></div></div>`}
     ${w.feel || w.note ? html`<div class="card stack">${w.feel ? html`<span><b>Sensación:</b> ${w.feel}/5</span>` : null}${w.note ? html`<span>${w.note}</span>` : null}</div>` : null}
     <div class="exlist">${(w.ex || []).map((e, k) => { const def = getEx(e.id); const ep = prs.filter(p => p.ex === e.id); let wn = 0; return html`<div class="exd" key=${k}>
       <div class="t"><span>${e.n || def.n}</span>${ep.length ? html`<span class="pr-badge"><${Icon} n="trophy" />${ep.map(p => PR_LABEL[p.k]).join(' · ')}</span>` : null}</div>
@@ -2611,14 +2597,6 @@ function DetailSheet({ id, fresh, s, idx, close }) {
       ${e.note ? html`<span class="muted sm">${e.note}</span>` : null}</div>`; })}</div>
     <button class="btn ghost danger" onClick=${del}><${Icon} n="trash" />Borrar entrenamiento</button>
   <//>`;
-}
-function saveDur(w, val, done) {
-  const m = num(val);
-  if (m == null || m < 0 || m > 600) { toast('Poné los minutos que duró, entre 0 y 600.', 'warn'); return; }
-  const sec = Math.round(m * 60);
-  A.putWorkout(Object.assign({}, w, { dur: sec, end: w.start + sec * 1000 }));
-  done();
-  toast('Duración guardada');
 }
 function SmartSheet({ s, close }) {
   const [dur, setDur] = useState(LS.get('smartDur', 60));
@@ -2828,7 +2806,84 @@ function CoachSheet({ s, mode, close }) {
 }
 
 /* ========== app ========== */
-const SHEETS = { photo: PhotoSheet, day: DaySheet, confirm: ConfirmSheet, picker: PickerSheet, finish: FinishSheet, detail: DetailSheet, smart: SmartSheet, programs: ProgramsSheet, routine: RoutineEditor, exMenu: ExMenuSheet, setMenu: SetMenuSheet, restPick: RestPickSheet, exInfo: ExInfoSheet, exportText: ExportTextSheet, coach: CoachSheet };
+function RoutinePickSheet({ cur, onPick, s, close }) {
+  const rk = rankRoutines(s.profile, s.workouts);
+  const inRot = new Set(rk.map(x => x.r.id));
+  const off = s.profile.routines.filter(r => !inRot.has(r.id));
+  const row = (r, x, k) => html`<button key=${r.id} aria-pressed=${r.id === cur} onClick=${() => { close(); onPick(r.id); }}>
+    <span class="grow rp-row"><b>${r.name}${k === 0 ? html` <span class="pill">Recomendada</span>` : null}</b>
+    <small>${x && x.last ? 'La hiciste ' + ago(x.last) : x ? 'Todavía no la hiciste' : 'Fuera de la rotación'}${x && x.tired.length ? ' · ' + x.tired.map(m => MUSCLES[m].toLowerCase()).join(', ') + ' todavía se ' + plural(x.tired.length, 'recupera', 'recuperan') : ''}</small></span>
+    ${r.id === cur ? html`<${Icon} n="check" />` : html`<${Icon} n="chevR" />`}</button>`;
+  return html`<${Sheet} title="Elegir día" onClose=${close}>
+    <p class="sheet-p">Primero va la que hace más que no hacés, salteando las que cargan músculos que todavía se recuperan.</p>
+    <div class="menu">${rk.map((x, k) => row(x.r, x, k))}${off.map(r => row(r, null, -1))}</div>
+  <//>`;
+}
+function QuickDoneSheet({ rid, onDone, s, idx, close }) {
+  const p = s.profile, st = p.settings;
+  const r = p.routines.find(x => x.id === rid);
+  const [when, setWhen] = useState('hoy');
+  const [mins, setMins] = useState(() => r ? String(estMinutes(r)) : '60');
+  const [feel, setFeel] = useState(null);
+  const [note, setNote] = useState('');
+  const [rows, setRows] = useState(() => r ? r.slots.map(sl => {
+    const exId = sl.ex[sl.idx % sl.ex.length], def = getEx(exId), sug = suggest(exId, sl, idx, st) || {};
+    return { slot: sl.id, id: exId, on: true, n: String(sl.sets), w: sug.w ? toStr(sug.w) : '', r: String(sug.r || sug.s || sl.rmin), m: String(sl.rmin) };
+  }) : []);
+  if (!r) return null;
+  const upd = (k, f, v) => setRows(rs => rs.map((x, j) => j === k ? Object.assign({}, x, { [f]: v }) : x));
+  const save = () => {
+    const dur = Math.round(num(mins) || 0);
+    if (dur <= 0) { toast('Anotá cuántos minutos duró.', 'warn'); return; }
+    const on = rows.filter(x => x.on);
+    if (!on.length) { toast('Marcá al menos un ejercicio.', 'warn'); return; }
+    const ex = [];
+    for (const x of on) {
+      const def = getEx(x.id), n = clamp(Math.round(num(x.n) || 1), 1, 20);
+      let set1;
+      if (def.t === 'cardio') { const m = num(x.m); if (!m) { toast(`Anotá los minutos de ${def.n}.`, 'warn'); return; } ex.push({ id: x.id, n: def.n, slot: x.slot, note: '', ss: false, sets: [{ t: 'n', m, d: 0 }] }); continue; }
+      if (def.t === 'time') set1 = { t: 'n', s: Math.round(num(x.r) || 0) };
+      else {
+        const w = num(x.w), rp = Math.round(num(x.r) || 0);
+        if (!rp) { toast(`Anotá las reps de ${def.n}.`, 'warn'); return; }
+        if (def.t === 'wr' && w == null) { toast(`Anotá el peso de ${def.n} o destildalo.`, 'warn'); return; }
+        set1 = { t: 'n', w: Math.max(0, w || 0), r: rp };
+      }
+      ex.push({ id: x.id, n: def.n, slot: x.slot, note: '', ss: false, sets: Array.from({ length: n }, () => Object.assign({}, set1)) });
+    }
+    const end = when === 'hoy' ? Date.now() : Date.now() - DAY;
+    const w = { id: uid(), name: r.name, routineId: r.id, start: end - dur * 60000, end, dur: dur * 60, ex, note: note.trim().slice(0, 2000), feel };
+    const wst = workoutStats(w); w.vol = Math.round(wst.vol); w.nsets = wst.sets;
+    A.putWorkout(w);
+    A.profile(q => advanceSlots(q, r.id, { ex: ex.map(e => ({ id: e.id, slot: e.slot, sets: [{ done: true }] })) }));
+    close();
+    if (onDone) onDone();
+    toast(`Guardado: ${r.name} · ${dur} min`);
+  };
+  const FEEL = ['Muy duro', 'Duro', 'Normal', 'Bien', 'Excelente'];
+  const inp = (k, f, aria, w) => html`<input class="inp" style=${w ? `width:${w}px` : ''} inputmode="decimal" aria-label=${aria} value=${rows[k][f]} onInput=${e => upd(k, f, e.target.value)} />`;
+  return html`<${Sheet} title="Ya la hice" onClose=${close} full footer=${html`<button class="btn" onClick=${close}>Cancelar</button><button class="btn primary" onClick=${save}><${Icon} n="check" />Guardar</button>`}>
+    <p class="muted">${r.name}. Ajustá solo lo que haya cambiado.</p>
+    <div class="grid2">
+      <div class="field"><span class="lbl">Cuándo</span><div class="seg" role="group" aria-label="Cuándo">${[['hoy', 'Hoy'], ['ayer', 'Ayer']].map(([k, l]) => html`<button key=${k} aria-pressed=${when === k} onClick=${() => setWhen(k)}>${l}</button>`)}</div></div>
+      <label class="field"><span class="lbl">Duración (min)</span><input id="qd-min" class="input" inputmode="numeric" value=${mins} onInput=${e => setMins(e.target.value)} /></label>
+    </div>
+    <div class="stack" style="gap:8px">
+      <span class="eyebrow">Qué hiciste</span>
+      ${rows.map((x, k) => { const def = getEx(x.id); return html`<div key=${x.slot} class=${'qd-row' + (x.on ? '' : ' off')}>
+        <button class="chk" aria-pressed=${x.on} aria-label=${(x.on ? 'Quitar ' : 'Incluir ') + def.n} onClick=${() => upd(k, 'on', !x.on)}><${Icon} n="check" bold /></button>
+        <div class="grow qd-main"><span class="qd-name">${def.n}</span>
+          ${x.on ? html`<div class="qd-vals">${def.t === 'cardio' ? html`${inp(k, 'm', 'Minutos de ' + def.n, 64)}<span>min</span>`
+            : def.t === 'time' ? html`${inp(k, 'n', 'Series de ' + def.n, 44)}<span>×</span>${inp(k, 'r', 'Segundos de ' + def.n, 58)}<span>s</span>`
+            : html`${inp(k, 'n', 'Series de ' + def.n, 44)}<span>×</span>${inp(k, 'w', (def.t === 'bw' ? 'Lastre' : 'Peso') + ' de ' + def.n, 64)}<span>kg ×</span>${inp(k, 'r', 'Reps de ' + def.n, 48)}<span>reps</span>`}</div>` : html`<span class="sm muted">No lo hiciste</span>`}
+        </div></div>`; })}
+    </div>
+    <div class="field"><span class="lbl">¿Cómo te sentiste?</span>
+      <div class="feel" role="group" aria-label="Sensación">${FEEL.map((l, i) => html`<button key=${i} aria-pressed=${feel === i + 1} onClick=${() => setFeel(feel === i + 1 ? null : i + 1)}>${i + 1}<small>${l}</small></button>`)}</div></div>
+    <label class="field"><span class="lbl">Notas</span><textarea id="qd-note" class="input" placeholder="Molestias, qué cambiaste… (podés dictar con el micrófono del teclado)" value=${note} onInput=${e => setNote(e.target.value)}></textarea></label>
+  <//>`;
+}
+const SHEETS = { photo: PhotoSheet, day: DaySheet, confirm: ConfirmSheet, picker: PickerSheet, finish: FinishSheet, detail: DetailSheet, smart: SmartSheet, programs: ProgramsSheet, routine: RoutineEditor, exMenu: ExMenuSheet, setMenu: SetMenuSheet, restPick: RestPickSheet, exInfo: ExInfoSheet, routinePick: RoutinePickSheet, quickDone: QuickDoneSheet, exportText: ExportTextSheet, coach: CoachSheet };
 const TABS = [['hoy', 'Hoy', 'plate'], ['rutinas', 'Rutinas', 'list'], ['progreso', 'Progreso', 'trend'], ['historial', 'Historial', 'clock'], ['mas', 'Más', 'sliders']];
 function SyncBadge({ s }) {
   const map = { loading: ['local', 'Conectando…'], ok: ['', 'Guardado'], saving: ['saving', 'Guardando…'], error: ['error', 'Sin conexión'], local: ['local', 'Solo este dispositivo'], memory: ['error', 'Sin guardar'], idle: ['local', '…'] };
