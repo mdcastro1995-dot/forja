@@ -2347,8 +2347,9 @@ function photoPrompt(s, hint, dictated) {
   return head +
     (hint ? `Aclaración del atleta: "${hint.slice(0, 400)}"\n` : '') +
     'Para cada ejercicio elegí el id más parecido de esta lista (id | nombre | músculo | tipo). Si ninguno corresponde de verdad, poné "id": null y completá "musculo" (una de: ' + Object.keys(MUSCLES).join(', ') + ') y "tipo" (wr = peso y reps, bw = peso corporal, time = segundos, cardio = minutos/km).\n' + lib + '\n\n' +
+    'Cada actividad distinta es un ejercicio aparte (por ejemplo "caminata" y "fisioterapia" son dos ejercicios, aunque se nombren juntas). Para cardio o actividades sin peso, poné minutos en "min", kilómetros en "km" y, si dice pasos, la cantidad en "pasos".\n' +
     'Si la foto trae cargas o repeticiones HECHAS (planilla completada), ponelas en "realizado", una entrada por serie. Si es solo lo planificado, dejá "realizado" vacío. Para formatos como AMRAP/EMOM/For time, describilo en "formato" del bloque y repartí los ejercicios igual. No inventes números que no estén en la foto: si no se ven, null.\n' +
-    'Respondé SOLO con JSON:\n{"titulo":"nombre corto","fecha":"AAAA-MM-DD o null","notas":"formato del WOD, rondas, tiempo, observaciones","ejercicios":[{"id":"press_banca","nombre":"texto tal como aparece","musculo":null,"tipo":null,"series":3,"rmin":8,"rmax":10,"descanso":null,"bloque":"A","formato":null,"realizado":[{"kg":60,"reps":10,"seg":null,"min":null,"km":null}]}]}';
+    'Respondé SOLO con JSON:\n{"titulo":"nombre corto","fecha":"AAAA-MM-DD o null","notas":"formato del WOD, rondas, tiempo, observaciones","ejercicios":[{"id":"press_banca","nombre":"texto tal como aparece","musculo":null,"tipo":null,"series":3,"rmin":8,"rmax":10,"descanso":null,"bloque":"A","formato":null,"realizado":[{"kg":60,"reps":10,"seg":null,"min":null,"km":null,"pasos":null}]}]}';
 }
 function cleanPhoto(o) {
   if (!o || !Array.isArray(o.ejercicios)) return null;
@@ -2358,10 +2359,17 @@ function cleanPhoto(o) {
     const name = String(e.nombre || (known ? getEx(known).n : 'Ejercicio')).slice(0, 60);
     const t = known ? getEx(known).t : (KIND_KEYS.includes(e.tipo) ? e.tipo : 'wr');
     const m = known ? getEx(known).m : (MUSCLES[e.musculo] ? e.musculo : 'core');
-    const done = (Array.isArray(e.realizado) ? e.realizado : []).slice(0, 12).map(x => ({ w: num(x && x.kg), r: num(x && x.reps), s: num(x && x.seg), m: num(x && x.min), d: num(x && x.km) })).filter(x => x.w != null || x.r != null || x.s != null || x.m != null || x.d != null);
+    let steps = 0;
+    const done = (Array.isArray(e.realizado) ? e.realizado : []).slice(0, 12).map(x => {
+      const o = { w: num(x && x.kg), r: num(x && x.reps), s: num(x && x.seg), m: num(x && x.min), d: num(x && x.km) };
+      const p = num(x && x.pasos);
+      // Pasos sin km: se estiman a 0,75 m por paso, y la nota del ejercicio lo aclara.
+      if (p && p > 0) { steps += p; if (o.d == null) o.d = Math.round(p * 0.00075 * 10) / 10; }
+      return o;
+    }).filter(x => x.w != null || x.r != null || x.s != null || x.m != null || x.d != null);
     const def = defRange({ t, k: 'c' });
     const rmin = clamp(Math.round(num(e.rmin) || (done[0] && (done[0].r || done[0].s || done[0].m)) || def.rmin), 1, 300);
-    return { key: uid(), id: known, name, t, m, sets: clamp(Math.round(num(e.series) || done.length || 3), 1, 12), rmin, rmax: clamp(Math.round(num(e.rmax) || rmin), rmin, 300), rest: e.descanso ? clamp(Math.round(num(e.descanso) || 90), 20, 360) : null, label: [e.bloque, e.formato].filter(Boolean).join(' · ').slice(0, 40), done };
+    return { key: uid(), id: known, name, t, m, sets: clamp(Math.round(num(e.series) || done.length || 3), 1, 12), rmin, rmax: clamp(Math.round(num(e.rmax) || rmin), rmin, 300), rest: e.descanso ? clamp(Math.round(num(e.descanso) || 90), 20, 360) : null, label: [e.bloque, e.formato].filter(Boolean).join(' · ').slice(0, 40), done, stepsNote: steps ? `${NF1.format(steps)} pasos (km estimados)` : '' };
   }).filter(Boolean);
   if (!items.length) return null;
   const f = typeof o.fecha === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(o.fecha) && o.fecha <= dayKey(Date.now()) ? o.fecha : null;
@@ -2438,12 +2446,30 @@ function PhotoSheet({ s, close, mode }) {
       const sets = it.done.map(x => ({ t: 'n', w: x.w || 0, r: x.r != null ? Math.round(x.r) : undefined, s: x.s != null ? Math.round(x.s) : undefined, m: x.m != null ? x.m : undefined, d: x.d != null ? x.d : undefined }))
         .filter(x => def.t === 'time' ? x.s : def.t === 'cardio' ? (x.m || x.d) : x.r);
       sets.forEach(x => Object.keys(x).forEach(k => x[k] === undefined && delete x[k]));
-      if (sets.length) ex.push({ id: def.id, n: def.n, slot: null, note: it.label || '', ss: false, sets });
+      if (sets.length) ex.push({ id: def.id, n: def.n, slot: null, note: [it.label, it.stepsNote].filter(Boolean).join(' · '), ss: false, sets });
     });
-    if (!ex.length) { toast('La foto no trae series hechas con repeticiones o tiempos para registrar.', 'warn'); return; }
-    const t = keyTime(date) + 6 * 36e5;
-    const w = { id: uid(), name: res.title, routineId: null, start: t, end: t, dur: 0, ex, note: ('Cargado desde foto. ' + res.notes).trim(), feel: null };
-    const st = workoutStats(w); w.vol = Math.round(st.vol); w.nsets = st.sets;
+    if (!ex.length) { toast(voice ? 'No encontré series, minutos ni kilómetros para registrar.' : 'La foto no trae series hechas con repeticiones o tiempos para registrar.', 'warn'); return; }
+    const t0 = keyTime(date) + 6 * 36e5;
+    const src = (voice ? 'Cargado por dictado. ' : 'Cargado desde foto. ') + res.notes;
+    const isCardio = (e) => getEx(e.id).t === 'cardio';
+    const cardioSec = (list) => Math.round(list.reduce((a, e) => a + e.sets.reduce((b, x) => b + (x.m || 0), 0), 0) * 60);
+    const mk = (name, list, start) => {
+      // Si todo es cardio o actividad por minutos, la duración es la suma de esos minutos.
+      const dur = list.every(isCardio) ? cardioSec(list) : 0;
+      const w = { id: uid(), name, routineId: null, start, end: start + dur * 1000, dur, ex: list, note: src.trim(), feel: null };
+      const st = workoutStats(w); w.vol = Math.round(st.vol); w.nsets = st.sets;
+      return w;
+    };
+    // Varias actividades sueltas (caminata, fisio, natación…): una sesión por actividad, una después de la otra.
+    if (ex.length > 1 && ex.every(isCardio)) {
+      let t = t0;
+      const ws = ex.map(e => { const w = mk(e.n, [e], t); t = w.end + 60000; return w; });
+      ws.forEach(w => A.putWorkout(w));
+      close();
+      toast(`Se guardaron ${ws.length} actividades por separado`);
+      return;
+    }
+    const w = mk(res.title, ex, t0);
     A.putWorkout(w);
     close(); openSheet('detail', { id: w.id });
   };
@@ -2465,7 +2491,7 @@ function PhotoSheet({ s, close, mode }) {
       ${res.notes ? html`<p class="sheet-p"><b>Notas:</b> ${res.notes}</p>` : null}
       <div class="menu">${res.items.map(it => html`<div key=${it.key} class="chg">
         <span class="grow"><b>${it.id ? getEx(it.id).n : it.name}</b>
-          <small>${it.id ? (norm(getEx(it.id).n) !== norm(it.name) ? `En la foto: “${it.name}” · ` : '') : 'Nuevo ejercicio propio · '}${it.label ? it.label + ' · ' : ''}${it.sets}×${it.rmin === it.rmax ? it.rmin : it.rmin + '–' + it.rmax}${it.t === 'time' ? ' s' : it.t === 'cardio' ? ' min' : ''}${it.done.length ? ' · hecho: ' + doneTxt(it) : ''}</small></span>
+          <small>${it.id ? (norm(getEx(it.id).n) !== norm(it.name) ? `En la foto: “${it.name}” · ` : '') : 'Nuevo ejercicio propio · '}${it.label ? it.label + ' · ' : ''}${it.sets}×${it.rmin === it.rmax ? it.rmin : it.rmin + '–' + it.rmax}${it.t === 'time' ? ' s' : it.t === 'cardio' ? ' min' : ''}${it.done.length ? ' · hecho: ' + doneTxt(it) : ''}${it.stepsNote ? ' · ' + it.stepsNote : ''}</small></span>
         <button class="icon-btn sm" aria-label=${'Cambiar el ejercicio de ' + it.name} onClick=${() => remap(it)}><${Icon} n="swap" /></button>
         <button class="icon-btn sm" aria-label=${'Quitar ' + it.name} onClick=${() => remove(it.key)}><${Icon} n="x" /></button>
       </div>`)}</div>
@@ -2564,6 +2590,7 @@ function FinishSheet({ s, idx, close }) {
 }
 function DetailSheet({ id, fresh, s, idx, close }) {
   const w = s.workouts.find(x => x.id === id);
+  const [durEd, setDurEd] = useState(null);
   if (!w) return html`<${Sheet} title="Entrenamiento" onClose=${close}><p class="sheet-p">Este entrenamiento ya no existe.</p><//>`;
   const st = workoutStats(w);
   const prs = idx.byW[w.id] || [];
@@ -2573,6 +2600,10 @@ function DetailSheet({ id, fresh, s, idx, close }) {
     <p class="muted">${cap(DF_LONG.format(new Date(w.start)))} · ${DF_TIME.format(new Date(w.start))}${w.example ? ' · dato de ejemplo' : ''}</p>
     <button class="btn" onClick=${() => { close(); openSheet('day', { date: dayKey(w.start) }); }}><${Icon} n="note" />Registrar cómo te fue y ajustar la rutina</button>
     <div class="sum-tiles"><${Tile} label="Duración" value=${fMin(w.dur)} /><${Tile} label="Volumen" value=${fVol(st.vol)} /><${Tile} label="Series" value=${st.sets} /></div>
+    ${durEd == null
+      ? html`<button class="btn ghost sm" style="align-self:flex-start" onClick=${() => setDurEd(w.dur ? String(Math.round(w.dur / 60)) : '')}><${Icon} n="edit" />${w.dur ? 'Cambiar duración' : 'Agregar duración'}</button>`
+      : html`<div class="card stack"><label class="field"><span class="lbl">Duración (minutos)</span><input id="detail-dur" class="input" inputmode="numeric" placeholder="Ej.: 45" value=${durEd} onInput=${e => setDurEd(e.target.value)} /></label>
+        <div class="row"><button class="btn sm" onClick=${() => setDurEd(null)}>Cancelar</button><button class="btn primary sm" onClick=${() => saveDur(w, durEd, () => setDurEd(null))}><${Icon} n="check" />Guardar duración</button></div></div>`}
     ${w.feel || w.note ? html`<div class="card stack">${w.feel ? html`<span><b>Sensación:</b> ${w.feel}/5</span>` : null}${w.note ? html`<span>${w.note}</span>` : null}</div>` : null}
     <div class="exlist">${(w.ex || []).map((e, k) => { const def = getEx(e.id); const ep = prs.filter(p => p.ex === e.id); let wn = 0; return html`<div class="exd" key=${k}>
       <div class="t"><span>${e.n || def.n}</span>${ep.length ? html`<span class="pr-badge"><${Icon} n="trophy" />${ep.map(p => PR_LABEL[p.k]).join(' · ')}</span>` : null}</div>
@@ -2580,6 +2611,14 @@ function DetailSheet({ id, fresh, s, idx, close }) {
       ${e.note ? html`<span class="muted sm">${e.note}</span>` : null}</div>`; })}</div>
     <button class="btn ghost danger" onClick=${del}><${Icon} n="trash" />Borrar entrenamiento</button>
   <//>`;
+}
+function saveDur(w, val, done) {
+  const m = num(val);
+  if (m == null || m < 0 || m > 600) { toast('Poné los minutos que duró, entre 0 y 600.', 'warn'); return; }
+  const sec = Math.round(m * 60);
+  A.putWorkout(Object.assign({}, w, { dur: sec, end: w.start + sec * 1000 }));
+  done();
+  toast('Duración guardada');
 }
 function SmartSheet({ s, close }) {
   const [dur, setDur] = useState(LS.get('smartDur', 60));
