@@ -133,7 +133,9 @@ function DaySheet({ s, date, close }) {
     if (out.sleep == null) delete out.sleep;
     return out;
   };
-  const save = () => { A.putDay(build()); toast('Día guardado'); };
+  const toHistory = () => openSheet('photo', { mode: 'voz', text: text.trim(), day: d });
+  // Guardar: si contaste ejercicios y ese día no hay sesiones cargadas, pasa a la pantalla de ejercicios para confirmarlos.
+  const save = () => { A.putDay(build()); if (text.trim() && !ws.length && s.caps.sample) toHistory(); else toast('Día guardado'); };
   const ask = async () => {
     const day = build();
     A.putDay(day);
@@ -196,6 +198,7 @@ function DaySheet({ s, date, close }) {
       ${ws.length ? html`<div class="stack">${ws.map(w => html`<button key=${w.id} class="pritem day-w" onClick=${() => openSheet('detail', { id: w.id })}><${Icon} n="dumbbell" /><span class="grow"><span class="t">${w.name}</span><br /><span class="s">${fMin(w.dur)} · ${workoutStats(w).sets} series</span></span><${Icon} n="chevR" /></button>`)}</div>` : html`<p class="muted sm">No hay sesiones cargadas este día. Contalo abajo o sumá una actividad.</p>`}
     </div>
     <label class="field"><span class="lbl">¿Qué hiciste y cómo te fue?</span><textarea id="day-text" class="input" placeholder="Ej.: Hice Piernas + Hombros pero salteé el hip thrust porque molestó el tobillo. Después caminé 15 minutos." value=${text} onInput=${e => setText(e.target.value)}></textarea></label>
+    ${text.trim() ? html`<button class="btn sm" style="align-self:flex-start" onClick=${() => { A.putDay(build()); toHistory(); }}><${Icon} n="dumbbell" />${ws.length ? 'Pasar al historial lo que falte' : 'Pasar los ejercicios al historial'}</button>` : null}
     <div class="field"><span class="lbl">${inj ? `Dolor de ${injuryLabel(inj).toLowerCase()} (0 = nada, 10 = máximo)` : 'Dolor o molestia (0 = nada, 10 = máximo)'}</span>
       <div class="pain" role="group" aria-label="Nivel de dolor">${Array.from({ length: 11 }, (_, i) => html`<button key=${i} class=${i >= 7 ? 'hi' : i >= 4 ? 'mid' : ''} aria-pressed=${pain === i} onClick=${() => setPain(pain === i ? null : i)}>${i}</button>`)}</div></div>
     <div class="grid2">

@@ -87,6 +87,7 @@ function FinishSheet({ s, idx, close }) {
 }
 function DetailSheet({ id, fresh, s, idx, close }) {
   const w = s.workouts.find(x => x.id === id);
+  const [durEd, setDurEd] = useState(null);
   if (!w) return html`<${Sheet} title="Entrenamiento" onClose=${close}><p class="sheet-p">Este entrenamiento ya no existe.</p><//>`;
   const st = workoutStats(w);
   const prs = idx.byW[w.id] || [];
@@ -96,6 +97,10 @@ function DetailSheet({ id, fresh, s, idx, close }) {
     <p class="muted">${cap(DF_LONG.format(new Date(w.start)))} · ${DF_TIME.format(new Date(w.start))}${w.example ? ' · dato de ejemplo' : ''}</p>
     <button class="btn" onClick=${() => { close(); openSheet('day', { date: dayKey(w.start) }); }}><${Icon} n="note" />Registrar cómo te fue y ajustar la rutina</button>
     <div class="sum-tiles"><${Tile} label="Duración" value=${fMin(w.dur)} /><${Tile} label="Volumen" value=${fVol(st.vol)} /><${Tile} label="Series" value=${st.sets} /></div>
+    ${durEd == null
+      ? html`<button class="btn ghost sm" style="align-self:flex-start" onClick=${() => setDurEd(w.dur ? String(Math.round(w.dur / 60)) : '')}><${Icon} n="edit" />${w.dur ? 'Cambiar duración' : 'Agregar duración'}</button>`
+      : html`<div class="card stack"><label class="field"><span class="lbl">Duración (minutos)</span><input id="detail-dur" class="input" inputmode="numeric" placeholder="Ej.: 45" value=${durEd} onInput=${e => setDurEd(e.target.value)} /></label>
+        <div class="row"><button class="btn sm" onClick=${() => setDurEd(null)}>Cancelar</button><button class="btn primary sm" onClick=${() => saveDur(w, durEd, () => setDurEd(null))}><${Icon} n="check" />Guardar duración</button></div></div>`}
     ${w.feel || w.note ? html`<div class="card stack">${w.feel ? html`<span><b>Sensación:</b> ${w.feel}/5</span>` : null}${w.note ? html`<span>${w.note}</span>` : null}</div>` : null}
     <div class="exlist">${(w.ex || []).map((e, k) => { const def = getEx(e.id); const ep = prs.filter(p => p.ex === e.id); let wn = 0; return html`<div class="exd" key=${k}>
       <div class="t"><span>${e.n || def.n}</span>${ep.length ? html`<span class="pr-badge"><${Icon} n="trophy" />${ep.map(p => PR_LABEL[p.k]).join(' · ')}</span>` : null}</div>
@@ -103,6 +108,14 @@ function DetailSheet({ id, fresh, s, idx, close }) {
       ${e.note ? html`<span class="muted sm">${e.note}</span>` : null}</div>`; })}</div>
     <button class="btn ghost danger" onClick=${del}><${Icon} n="trash" />Borrar entrenamiento</button>
   <//>`;
+}
+function saveDur(w, val, done) {
+  const m = num(val);
+  if (m == null || m < 0 || m > 600) { toast('Poné los minutos que duró, entre 0 y 600.', 'warn'); return; }
+  const sec = Math.round(m * 60);
+  A.putWorkout(Object.assign({}, w, { dur: sec, end: w.start + sec * 1000 }));
+  done();
+  toast('Duración guardada');
 }
 function SmartSheet({ s, close }) {
   const [dur, setDur] = useState(LS.get('smartDur', 60));

@@ -9,8 +9,9 @@ function photoPrompt(s, hint, dictated) {
   return head +
     (hint ? `Aclaración del atleta: "${hint.slice(0, 400)}"\n` : '') +
     'Para cada ejercicio elegí el id más parecido de esta lista (id | nombre | músculo | tipo). Si ninguno corresponde de verdad, poné "id": null y completá "musculo" (una de: ' + Object.keys(MUSCLES).join(', ') + ') y "tipo" (wr = peso y reps, bw = peso corporal, time = segundos, cardio = minutos/km).\n' + lib + '\n\n' +
+    'Cada actividad distinta es un ejercicio aparte (por ejemplo "caminata" y "fisioterapia" son dos ejercicios, aunque se nombren juntas). Para cardio o actividades sin peso, poné minutos en "min", kilómetros en "km" y, si dice pasos, la cantidad en "pasos".\n' +
     'Si la foto trae cargas o repeticiones HECHAS (planilla completada), ponelas en "realizado", una entrada por serie. Si es solo lo planificado, dejá "realizado" vacío. Para formatos como AMRAP/EMOM/For time, describilo en "formato" del bloque y repartí los ejercicios igual. No inventes números que no estén en la foto: si no se ven, null.\n' +
-    'Respondé SOLO con JSON:\n{"titulo":"nombre corto","fecha":"AAAA-MM-DD o null","notas":"formato del WOD, rondas, tiempo, observaciones","ejercicios":[{"id":"press_banca","nombre":"texto tal como aparece","musculo":null,"tipo":null,"series":3,"rmin":8,"rmax":10,"descanso":null,"bloque":"A","formato":null,"realizado":[{"kg":60,"reps":10,"seg":null,"min":null,"km":null}]}]}';
+    'Respondé SOLO con JSON:\n{"titulo":"nombre corto","fecha":"AAAA-MM-DD o null","notas":"formato del WOD, rondas, tiempo, observaciones","ejercicios":[{"id":"press_banca","nombre":"texto tal como aparece","musculo":null,"tipo":null,"series":3,"rmin":8,"rmax":10,"descanso":null,"bloque":"A","formato":null,"realizado":[{"kg":60,"reps":10,"seg":null,"min":null,"km":null,"pasos":null}]}]}';
 }
 function cleanPhoto(o) {
   if (!o || !Array.isArray(o.ejercicios)) return null;
@@ -20,10 +21,17 @@ function cleanPhoto(o) {
     const name = String(e.nombre || (known ? getEx(known).n : 'Ejercicio')).slice(0, 60);
     const t = known ? getEx(known).t : (KIND_KEYS.includes(e.tipo) ? e.tipo : 'wr');
     const m = known ? getEx(known).m : (MUSCLES[e.musculo] ? e.musculo : 'core');
-    const done = (Array.isArray(e.realizado) ? e.realizado : []).slice(0, 12).map(x => ({ w: num(x && x.kg), r: num(x && x.reps), s: num(x && x.seg), m: num(x && x.min), d: num(x && x.km) })).filter(x => x.w != null || x.r != null || x.s != null || x.m != null || x.d != null);
+    let steps = 0;
+    const done = (Array.isArray(e.realizado) ? e.realizado : []).slice(0, 12).map(x => {
+      const o = { w: num(x && x.kg), r: num(x && x.reps), s: num(x && x.seg), m: num(x && x.min), d: num(x && x.km) };
+      const p = num(x && x.pasos);
+      // Pasos sin km: se estiman a 0,75 m por paso, y la nota del ejercicio lo aclara.
+      if (p && p > 0) { steps += p; if (o.d == null) o.d = Math.round(p * 0.00075 * 10) / 10; }
+      return o;
+    }).filter(x => x.w != null || x.r != null || x.s != null || x.m != null || x.d != null);
     const def = defRange({ t, k: 'c' });
     const rmin = clamp(Math.round(num(e.rmin) || (done[0] && (done[0].r || done[0].s || done[0].m)) || def.rmin), 1, 300);
-    return { key: uid(), id: known, name, t, m, sets: clamp(Math.round(num(e.series) || done.length || 3), 1, 12), rmin, rmax: clamp(Math.round(num(e.rmax) || rmin), rmin, 300), rest: e.descanso ? clamp(Math.round(num(e.descanso) || 90), 20, 360) : null, label: [e.bloque, e.formato].filter(Boolean).join(' · ').slice(0, 40), done };
+    return { key: uid(), id: known, name, t, m, sets: clamp(Math.round(num(e.series) || done.length || 3), 1, 12), rmin, rmax: clamp(Math.round(num(e.rmax) || rmin), rmin, 300), rest: e.descanso ? clamp(Math.round(num(e.descanso) || 90), 20, 360) : null, label: [e.bloque, e.formato].filter(Boolean).join(' · ').slice(0, 40), done, stepsNote: steps ? `${NF1.format(steps)} pasos (km estimados)` : '' };
   }).filter(Boolean);
   if (!items.length) return null;
   const f = typeof o.fecha === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(o.fecha) && o.fecha <= dayKey(Date.now()) ? o.fecha : null;
@@ -43,9 +51,9 @@ function ensureExercises(items) {
   if (add.length) A.profile(p => { p.custom = p.custom.concat(add); });
   return ids;
 }
-function PhotoSheet({ s, close, mode }) {
+function PhotoSheet({ s, close, mode, text, day }) {
   const voice = mode === 'voz';
-  const [said, setSaid] = useState('');
+  const [said, setSaid] = useState(text || '');
   const sample = s.caps.sample;
   const [can, setCan] = useState(null);
   const [files, setFiles] = useState([]);
@@ -54,7 +62,7 @@ function PhotoSheet({ s, close, mode }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const [res, setRes] = useState(null);
-  const [date, setDate] = useState(dayKey(Date.now()));
+  const [date, setDate] = useState(day || dayKey(Date.now()));
   const ctl = useRef(null);
   const inRef = useRef(null);
   useEffect(() => { if (voice) { setCan(sample ? {} : false); return () => { if (ctl.current) ctl.current.abort(); }; } if (!sample || !sample.limits) { setCan(false); return; } sample.limits().then(l => setCan(l && l.images ? l.images : false)).catch(() => setCan(false)); return () => { if (ctl.current) ctl.current.abort(); }; }, []);
@@ -74,6 +82,9 @@ function PhotoSheet({ s, close, mode }) {
       setErr(e && e.code === 'image_rejected' ? 'Esa imagen no se pudo leer. Probá con otra (JPG o PNG).' : sampleErr(e));
     } finally { setBusy(false); }
   };
+  // Viene del registro del día: lee el texto apenas se abre.
+  const autoRead = useRef(!!(text && voice));
+  useEffect(() => { if (autoRead.current && sample) { autoRead.current = false; read(); } }, []);
   const upd = (key, patch) => setRes(r => Object.assign({}, r, { items: r.items.map(it => it.key === key ? Object.assign({}, it, patch) : it) }));
   const remove = (key) => setRes(r => Object.assign({}, r, { items: r.items.filter(it => it.key !== key) }));
   const remap = (it) => openSheet('picker', { title: 'Elegir ejercicio', multi: false, onPick: ([id]) => { const d = getEx(id); upd(it.key, { id, t: d.t, m: d.m }); } });
@@ -100,18 +111,36 @@ function PhotoSheet({ s, close, mode }) {
       const sets = it.done.map(x => ({ t: 'n', w: x.w || 0, r: x.r != null ? Math.round(x.r) : undefined, s: x.s != null ? Math.round(x.s) : undefined, m: x.m != null ? x.m : undefined, d: x.d != null ? x.d : undefined }))
         .filter(x => def.t === 'time' ? x.s : def.t === 'cardio' ? (x.m || x.d) : x.r);
       sets.forEach(x => Object.keys(x).forEach(k => x[k] === undefined && delete x[k]));
-      if (sets.length) ex.push({ id: def.id, n: def.n, slot: null, note: it.label || '', ss: false, sets });
+      if (sets.length) ex.push({ id: def.id, n: def.n, slot: null, note: [it.label, it.stepsNote].filter(Boolean).join(' · '), ss: false, sets });
     });
-    if (!ex.length) { toast('La foto no trae series hechas con repeticiones o tiempos para registrar.', 'warn'); return; }
-    const t = keyTime(date) + 6 * 36e5;
-    const w = { id: uid(), name: res.title, routineId: null, start: t, end: t, dur: 0, ex, note: ('Cargado desde foto. ' + res.notes).trim(), feel: null };
-    const st = workoutStats(w); w.vol = Math.round(st.vol); w.nsets = st.sets;
+    if (!ex.length) { toast(voice ? 'No encontré series, minutos ni kilómetros para registrar.' : 'La foto no trae series hechas con repeticiones o tiempos para registrar.', 'warn'); return; }
+    const t0 = keyTime(date) + 6 * 36e5;
+    const src = (voice ? 'Cargado por dictado. ' : 'Cargado desde foto. ') + res.notes;
+    const isCardio = (e) => getEx(e.id).t === 'cardio';
+    const cardioSec = (list) => Math.round(list.reduce((a, e) => a + e.sets.reduce((b, x) => b + (x.m || 0), 0), 0) * 60);
+    const mk = (name, list, start) => {
+      // Si todo es cardio o actividad por minutos, la duración es la suma de esos minutos.
+      const dur = list.every(isCardio) ? cardioSec(list) : 0;
+      const w = { id: uid(), name, routineId: null, start, end: start + dur * 1000, dur, ex: list, note: src.trim(), feel: null };
+      const st = workoutStats(w); w.vol = Math.round(st.vol); w.nsets = st.sets;
+      return w;
+    };
+    // Varias actividades sueltas (caminata, fisio, natación…): una sesión por actividad, una después de la otra.
+    if (ex.length > 1 && ex.every(isCardio)) {
+      let t = t0;
+      const ws = ex.map(e => { const w = mk(e.n, [e], t); t = w.end + 60000; return w; });
+      ws.forEach(w => A.putWorkout(w));
+      close();
+      toast(`Se guardaron ${ws.length} actividades por separado`);
+      return;
+    }
+    const w = mk(res.title, ex, t0);
     A.putWorkout(w);
     close(); openSheet('detail', { id: w.id });
   };
   const doneTxt = (it) => { const def = it.id ? getEx(it.id) : { t: it.t }; return it.done.map(x => setTxt({ w: x.w, r: x.r, s: x.s, m: x.m, d: x.d }, def)).join(' · '); };
-  if (can === false) return html`<${Sheet} title=${voice ? 'Dictar entrenamiento' : 'Cargar desde foto'} onClose=${close}><p class="sheet-p">${AI_HINT}</p><//>`;
-  return html`<${Sheet} title=${voice ? 'Dictar entrenamiento' : 'Cargar desde foto'} onClose=${close} full footer=${busy ? html`<button class="btn" onClick=${() => ctl.current && ctl.current.abort()}><${Icon} n="stop" />Detener</button>` : res ? (voice && hasDone ? html`<button class="btn" onClick=${() => setRes(null)}><${Icon} n="edit" />Corregir</button><button class="btn primary" onClick=${logDone}><${Icon} n="check" />Confirmar y guardar</button>` : html`<button class="btn" onClick=${asRoutine}><${Icon} n="list" />Guardar rutina</button><button class="btn primary" onClick=${startNow}><${Icon} n="play" fill />Empezar</button>`) : html`<button class="btn primary" disabled=${(voice ? !said.trim() : !files.length) || can == null} onClick=${read}><${Icon} n="spark" />${voice ? 'Armar el registro' : 'Leer la foto'}</button>`}>
+  if (can === false) return html`<${Sheet} title=${voice ? (text ? 'Ejercicios del día' : 'Dictar entrenamiento') : 'Cargar desde foto'} onClose=${close}><p class="sheet-p">${AI_HINT}</p><//>`;
+  return html`<${Sheet} title=${voice ? (text ? 'Ejercicios del día' : 'Dictar entrenamiento') : 'Cargar desde foto'} onClose=${close} full footer=${busy ? html`<button class="btn" onClick=${() => ctl.current && ctl.current.abort()}><${Icon} n="stop" />Detener</button>` : res ? (voice && hasDone ? html`<button class="btn" onClick=${() => setRes(null)}><${Icon} n="edit" />Corregir</button><button class="btn primary" onClick=${logDone}><${Icon} n="check" />Confirmar y guardar</button>` : html`<button class="btn" onClick=${asRoutine}><${Icon} n="list" />Guardar rutina</button><button class="btn primary" onClick=${startNow}><${Icon} n="play" fill />Empezar</button>`) : html`<button class="btn primary" disabled=${(voice ? !said.trim() : !files.length) || can == null} onClick=${read}><${Icon} n="spark" />${voice ? 'Armar el registro' : 'Leer la foto'}</button>`}>
     ${voice ? html`<p class="sheet-p">Tocá el cuadro y usá el <b>micrófono del teclado</b> para dictar lo que hiciste, como se lo contarías a un amigo. Claude arma las series y vos confirmás.</p>
     <textarea id="voice-text" class="input voice-box" rows="6" placeholder="Ej.: Hoy hice press banca 4 series, 10 con 50, 10 con 60, 8 con 70 y 3 con 80. Después remo con mancuerna 3 de 10 con 15 kilos por lado. Extensión en polea con barra 4 de 14 con 25." value=${said} onInput=${e => setSaid(e.target.value)}></textarea>
     <p class="muted sm">No hace falta un formato: decí el ejercicio, cuántas series, repeticiones y kilos. Si fue otro día, decilo ("ayer", "el lunes").</p>` : html`<p class="sheet-p">Sacale una foto a la pizarra del WOD, a tu planilla o a una hoja escrita. Claude la lee y te arma el entrenamiento para que lo revises.</p>`}
@@ -127,7 +156,7 @@ function PhotoSheet({ s, close, mode }) {
       ${res.notes ? html`<p class="sheet-p"><b>Notas:</b> ${res.notes}</p>` : null}
       <div class="menu">${res.items.map(it => html`<div key=${it.key} class="chg">
         <span class="grow"><b>${it.id ? getEx(it.id).n : it.name}</b>
-          <small>${it.id ? (norm(getEx(it.id).n) !== norm(it.name) ? `En la foto: “${it.name}” · ` : '') : 'Nuevo ejercicio propio · '}${it.label ? it.label + ' · ' : ''}${it.sets}×${it.rmin === it.rmax ? it.rmin : it.rmin + '–' + it.rmax}${it.t === 'time' ? ' s' : it.t === 'cardio' ? ' min' : ''}${it.done.length ? ' · hecho: ' + doneTxt(it) : ''}</small></span>
+          <small>${it.id ? (norm(getEx(it.id).n) !== norm(it.name) ? `En la foto: “${it.name}” · ` : '') : 'Nuevo ejercicio propio · '}${it.label ? it.label + ' · ' : ''}${it.sets}×${it.rmin === it.rmax ? it.rmin : it.rmin + '–' + it.rmax}${it.t === 'time' ? ' s' : it.t === 'cardio' ? ' min' : ''}${it.done.length ? ' · hecho: ' + doneTxt(it) : ''}${it.stepsNote ? ' · ' + it.stepsNote : ''}</small></span>
         <button class="icon-btn sm" aria-label=${'Cambiar el ejercicio de ' + it.name} onClick=${() => remap(it)}><${Icon} n="swap" /></button>
         <button class="icon-btn sm" aria-label=${'Quitar ' + it.name} onClick=${() => remove(it.key)}><${Icon} n="x" /></button>
       </div>`)}</div>
