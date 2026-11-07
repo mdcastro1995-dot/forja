@@ -1,6 +1,6 @@
 /* Forja · funciona sin conexión: guarda la app en el teléfono. */
-const CACHE = 'forja-1d264426';
-const SHELL = ['./', 'index.html', 'app.js?v=1d264426', 'shell.js', 'manifest.webmanifest', 'vendor/htm-preact.js', 'vendor/supabase.js', 'icons/icon-192.png', 'icons/apple-touch-icon.png'];
+const CACHE = 'forja-2cf24236';
+const SHELL = ['./', 'index.html', 'app.js?v=2cf24236', 'shell.js', 'manifest.webmanifest', 'vendor/htm-preact.js', 'vendor/supabase.js', 'icons/icon-192.png', 'icons/apple-touch-icon.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
 self.addEventListener('fetch', e => {

@@ -58,9 +58,17 @@ function useMic(value, setValue, inputId) {
   const srRef = useRef(null);
   const base = useRef('');
   useEffect(() => () => { try { if (srRef.current) srRef.current.abort(); } catch (e) {} }, []);
-  const stop = () => { try { if (srRef.current) srRef.current.stop(); } catch (e) {} };
+  // Terminar: el botón vuelve a "hablar" al instante, aunque el iPhone tarde (o no llegue) a cerrar el micrófono.
+  const stop = () => {
+    const r = srRef.current;
+    setRec(false);
+    if (!r) return;
+    srRef.current = null;
+    try { r.stop(); } catch (e) {}
+    setTimeout(() => { try { r.onresult = null; r.onend = null; r.onerror = null; r.abort(); } catch (e) {} }, 1200);
+  };
   const toggle = () => {
-    if (rec) { stop(); return; }
+    if (rec || srRef.current) { stop(); return; }
     if (!SR) { const t = document.getElementById(inputId); if (t) t.focus(); toast('En este teléfono se dicta con el micrófono del teclado: tocá el ícono 🎤 abajo a la derecha del teclado.', 'info', 6000); return; }
     const r = new SR();
     const nl = (navigator.language || '').toLowerCase();
@@ -69,11 +77,12 @@ function useMic(value, setValue, inputId) {
     base.current = (value || '').trim() ? value.trim() + ' ' : '';
     r.onresult = (e) => { let t = ''; for (let i = 0; i < e.results.length; i++) t += e.results[i][0].transcript; setValue(base.current + t.trim()); };
     r.onerror = (e) => {
+      if (srRef.current === r) srRef.current = null;
       setRec(false);
       if (e.error === 'not-allowed' || e.error === 'service-not-allowed') toast('Forja no tiene permiso para usar el micrófono. Habilitalo en Ajustes o usá el micrófono del teclado.', 'warn', 6500);
       else if (e.error !== 'aborted' && e.error !== 'no-speech') toast('No se pudo escuchar. Probá de nuevo o usá el micrófono del teclado.', 'warn');
     };
-    r.onend = () => setRec(false);
+    r.onend = () => { if (srRef.current === r) srRef.current = null; setRec(false); };
     srRef.current = r;
     try { r.start(); setRec(true); } catch (err) { setRec(false); toast('No se pudo abrir el micrófono. Usá el micrófono del teclado.', 'warn'); }
   };
