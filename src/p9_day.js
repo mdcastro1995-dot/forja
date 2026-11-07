@@ -126,6 +126,7 @@ function DaySheet({ s, date, close }) {
     setText(z ? z.text || '' : ''); setPain(z && z.pain != null ? z.pain : null); setEnergy(z ? z.energy || null : null); setSleep(z && z.sleep != null ? toStr(z.sleep) : ''); setErr('');
   }, [d]);
   const ws = dayWorkouts(s, d);
+  const mic = useMic(text, setText, 'day-text');
   const cardio = allExercises().filter(x => x.t === 'cardio');
   const build = () => {
     const out = Object.assign({}, saved || {}, { d, text: text.trim().slice(0, 2000), pain: pain, energy: energy, sleep: num(sleep), workouts: ws.map(w => w.id) });
@@ -135,8 +136,9 @@ function DaySheet({ s, date, close }) {
   };
   const toHistory = () => openSheet('photo', { mode: 'voz', text: text.trim(), day: d });
   // Guardar: si contaste ejercicios y ese día no hay sesiones cargadas, pasa a la pantalla de ejercicios para confirmarlos.
-  const save = () => { A.putDay(build()); if (text.trim() && !ws.length && s.caps.sample) toHistory(); else toast('Día guardado'); };
+  const save = () => { mic.stop(); A.putDay(build()); if (text.trim() && !ws.length && s.caps.sample) toHistory(); else toast('Día guardado'); };
   const ask = async () => {
+    mic.stop();
     const day = build();
     A.putDay(day);
     const sample = s.caps.sample;
@@ -197,6 +199,7 @@ function DaySheet({ s, date, close }) {
     <div class="field"><span class="lbl">Cargado en la app ese día</span>
       ${ws.length ? html`<div class="stack">${ws.map(w => html`<button key=${w.id} class="pritem day-w" onClick=${() => openSheet('detail', { id: w.id })}><${Icon} n="dumbbell" /><span class="grow"><span class="t">${w.name}</span><br /><span class="s">${fMin(w.dur)} · ${workoutStats(w).sets} series</span></span><${Icon} n="chevR" /></button>`)}</div>` : html`<p class="muted sm">No hay sesiones cargadas este día. Contalo abajo o sumá una actividad.</p>`}
     </div>
+    <${MicButton} rec=${mic.rec} onClick=${mic.toggle} has=${!!text.trim()} />
     <label class="field"><span class="lbl">¿Qué hiciste y cómo te fue?</span><textarea id="day-text" class="input" placeholder="Ej.: Hice Piernas + Hombros pero salteé el hip thrust porque molestó el tobillo. Después caminé 15 minutos." value=${text} onInput=${e => setText(e.target.value)}></textarea></label>
     ${text.trim() ? html`<button class="btn sm" style="align-self:flex-start" onClick=${() => { A.putDay(build()); toHistory(); }}><${Icon} n="dumbbell" />${ws.length ? 'Pasar al historial lo que falte' : 'Pasar los ejercicios al historial'}</button>` : null}
     <div class="field"><span class="lbl">${inj ? `Dolor de ${injuryLabel(inj).toLowerCase()} (0 = nada, 10 = máximo)` : 'Dolor o molestia (0 = nada, 10 = máximo)'}</span>

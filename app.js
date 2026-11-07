@@ -2130,6 +2130,7 @@ function DaySheet({ s, date, close }) {
     setText(z ? z.text || '' : ''); setPain(z && z.pain != null ? z.pain : null); setEnergy(z ? z.energy || null : null); setSleep(z && z.sleep != null ? toStr(z.sleep) : ''); setErr('');
   }, [d]);
   const ws = dayWorkouts(s, d);
+  const mic = useMic(text, setText, 'day-text');
   const cardio = allExercises().filter(x => x.t === 'cardio');
   const build = () => {
     const out = Object.assign({}, saved || {}, { d, text: text.trim().slice(0, 2000), pain: pain, energy: energy, sleep: num(sleep), workouts: ws.map(w => w.id) });
@@ -2139,8 +2140,9 @@ function DaySheet({ s, date, close }) {
   };
   const toHistory = () => openSheet('photo', { mode: 'voz', text: text.trim(), day: d });
   // Guardar: si contaste ejercicios y ese día no hay sesiones cargadas, pasa a la pantalla de ejercicios para confirmarlos.
-  const save = () => { A.putDay(build()); if (text.trim() && !ws.length && s.caps.sample) toHistory(); else toast('Día guardado'); };
+  const save = () => { mic.stop(); A.putDay(build()); if (text.trim() && !ws.length && s.caps.sample) toHistory(); else toast('Día guardado'); };
   const ask = async () => {
+    mic.stop();
     const day = build();
     A.putDay(day);
     const sample = s.caps.sample;
@@ -2201,6 +2203,7 @@ function DaySheet({ s, date, close }) {
     <div class="field"><span class="lbl">Cargado en la app ese día</span>
       ${ws.length ? html`<div class="stack">${ws.map(w => html`<button key=${w.id} class="pritem day-w" onClick=${() => openSheet('detail', { id: w.id })}><${Icon} n="dumbbell" /><span class="grow"><span class="t">${w.name}</span><br /><span class="s">${fMin(w.dur)} · ${workoutStats(w).sets} series</span></span><${Icon} n="chevR" /></button>`)}</div>` : html`<p class="muted sm">No hay sesiones cargadas este día. Contalo abajo o sumá una actividad.</p>`}
     </div>
+    <${MicButton} rec=${mic.rec} onClick=${mic.toggle} has=${!!text.trim()} />
     <label class="field"><span class="lbl">¿Qué hiciste y cómo te fue?</span><textarea id="day-text" class="input" placeholder="Ej.: Hice Piernas + Hombros pero salteé el hip thrust porque molestó el tobillo. Después caminé 15 minutos." value=${text} onInput=${e => setText(e.target.value)}></textarea></label>
     ${text.trim() ? html`<button class="btn sm" style="align-self:flex-start" onClick=${() => { A.putDay(build()); toHistory(); }}><${Icon} n="dumbbell" />${ws.length ? 'Pasar al historial lo que falte' : 'Pasar los ejercicios al historial'}</button>` : null}
     <div class="field"><span class="lbl">${inj ? `Dolor de ${injuryLabel(inj).toLowerCase()} (0 = nada, 10 = máximo)` : 'Dolor o molestia (0 = nada, 10 = máximo)'}</span>
@@ -2409,6 +2412,37 @@ function ensureExercises(items) {
   if (add.length) A.profile(p => { p.custom = p.custom.concat(add); });
   return ids;
 }
+/* Dictado con audio: reconocimiento de voz del navegador; si el teléfono no lo tiene, el micrófono del teclado. */
+function useMic(value, setValue, inputId) {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const [rec, setRec] = useState(false);
+  const srRef = useRef(null);
+  const base = useRef('');
+  useEffect(() => () => { try { if (srRef.current) srRef.current.abort(); } catch (e) {} }, []);
+  const stop = () => { try { if (srRef.current) srRef.current.stop(); } catch (e) {} };
+  const toggle = () => {
+    if (rec) { stop(); return; }
+    if (!SR) { const t = document.getElementById(inputId); if (t) t.focus(); toast('En este teléfono se dicta con el micrófono del teclado: tocá el ícono 🎤 abajo a la derecha del teclado.', 'info', 6000); return; }
+    const r = new SR();
+    const nl = (navigator.language || '').toLowerCase();
+    r.lang = nl.startsWith('es') ? navigator.language : 'es-AR';
+    r.continuous = true; r.interimResults = true;
+    base.current = (value || '').trim() ? value.trim() + ' ' : '';
+    r.onresult = (e) => { let t = ''; for (let i = 0; i < e.results.length; i++) t += e.results[i][0].transcript; setValue(base.current + t.trim()); };
+    r.onerror = (e) => {
+      setRec(false);
+      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') toast('Forja no tiene permiso para usar el micrófono. Habilitalo en Ajustes o usá el micrófono del teclado.', 'warn', 6500);
+      else if (e.error !== 'aborted' && e.error !== 'no-speech') toast('No se pudo escuchar. Probá de nuevo o usá el micrófono del teclado.', 'warn');
+    };
+    r.onend = () => setRec(false);
+    srRef.current = r;
+    try { r.start(); setRec(true); } catch (err) { setRec(false); toast('No se pudo abrir el micrófono. Usá el micrófono del teclado.', 'warn'); }
+  };
+  return { rec, toggle, stop };
+}
+function MicButton({ rec, onClick, has }) {
+  return html`<button class=${'mic-btn' + (rec ? ' on' : '')} aria-pressed=${rec} onClick=${onClick}><${Icon} n=${rec ? 'stop' : 'mic'} size=${26} /><span>${rec ? 'Escuchando… tocá para terminar' : has ? 'Seguir dictando' : 'Tocá para hablar'}</span></button>`;
+}
 function PhotoSheet({ s, close, mode, text, day }) {
   const voice = mode === 'voz';
   const [said, setSaid] = useState(text || '');
@@ -2426,8 +2460,10 @@ function PhotoSheet({ s, close, mode, text, day }) {
   useEffect(() => { if (voice) { setCan(sample ? {} : false); return () => { if (ctl.current) ctl.current.abort(); }; } if (!sample || !sample.limits) { setCan(false); return; } sample.limits().then(l => setCan(l && l.images ? l.images : false)).catch(() => setCan(false)); return () => { if (ctl.current) ctl.current.abort(); }; }, []);
   useEffect(() => { const u = files.map(f => URL.createObjectURL(f)); setUrls(u); return () => u.forEach(x => URL.revokeObjectURL(x)); }, [files]);
   const pick = (e) => { const max = (can && can.maxCount) || 4; const fl = [...(e.target.files || [])].filter(f => /^image\//.test(f.type)).slice(0, max); if (fl.length) { setFiles(fl); setRes(null); setErr(''); } e.target.value = ''; };
+  const { rec, toggle: toggleMic, stop: stopMic } = useMic(said, setSaid, 'voice-text');
   const read = async () => {
     if ((voice ? !said.trim() : !files.length) || busy) return;
+    if (voice) stopMic();
     setBusy(true); setErr(''); setRes(null);
     const c = new AbortController(); ctl.current = c;
     try {
@@ -2498,10 +2534,11 @@ function PhotoSheet({ s, close, mode, text, day }) {
   };
   const doneTxt = (it) => { const def = it.id ? getEx(it.id) : { t: it.t }; return it.done.map(x => setTxt({ w: x.w, r: x.r, s: x.s, m: x.m, d: x.d }, def)).join(' · '); };
   if (can === false) return html`<${Sheet} title=${voice ? (text ? 'Ejercicios del día' : 'Dictar entrenamiento') : 'Cargar desde foto'} onClose=${close}><p class="sheet-p">${AI_HINT}</p><//>`;
-  return html`<${Sheet} title=${voice ? (text ? 'Ejercicios del día' : 'Dictar entrenamiento') : 'Cargar desde foto'} onClose=${close} full footer=${busy ? html`<button class="btn" onClick=${() => ctl.current && ctl.current.abort()}><${Icon} n="stop" />Detener</button>` : res ? (voice && hasDone ? html`<button class="btn" onClick=${() => setRes(null)}><${Icon} n="edit" />Corregir</button><button class="btn primary" onClick=${logDone}><${Icon} n="check" />Confirmar y guardar</button>` : html`<button class="btn" onClick=${asRoutine}><${Icon} n="list" />Guardar rutina</button><button class="btn primary" onClick=${startNow}><${Icon} n="play" fill />Empezar</button>`) : html`<button class="btn primary" disabled=${(voice ? !said.trim() : !files.length) || can == null} onClick=${read}><${Icon} n="spark" />${voice ? 'Armar el registro' : 'Leer la foto'}</button>`}>
-    ${voice ? html`<p class="sheet-p">Tocá el cuadro y usá el <b>micrófono del teclado</b> para dictar lo que hiciste, como se lo contarías a un amigo. Claude arma las series y vos confirmás.</p>
-    <textarea id="voice-text" class="input voice-box" rows="6" placeholder="Ej.: Hoy hice press banca 4 series, 10 con 50, 10 con 60, 8 con 70 y 3 con 80. Después remo con mancuerna 3 de 10 con 15 kilos por lado. Extensión en polea con barra 4 de 14 con 25." value=${said} onInput=${e => setSaid(e.target.value)}></textarea>
-    <p class="muted sm">No hace falta un formato: decí el ejercicio, cuántas series, repeticiones y kilos. Si fue otro día, decilo ("ayer", "el lunes").</p>` : html`<p class="sheet-p">Sacale una foto a la pizarra del WOD, a tu planilla o a una hoja escrita. Claude la lee y te arma el entrenamiento para que lo revises.</p>`}
+  return html`<${Sheet} title=${voice ? (text ? 'Ejercicios del día' : 'Dictar entrenamiento') : 'Cargar desde foto'} onClose=${close} full footer=${busy ? html`<button class="btn" onClick=${() => ctl.current && ctl.current.abort()}><${Icon} n="stop" />Detener</button>` : res ? (voice && hasDone ? html`<button class="btn" onClick=${() => setRes(null)}><${Icon} n="edit" />Corregir</button><button class="btn primary" onClick=${logDone}><${Icon} n="check" />Confirmar y guardar</button>` : html`<button class="btn" onClick=${asRoutine}><${Icon} n="list" />Guardar rutina</button><button class="btn primary" onClick=${startNow}><${Icon} n="play" fill />Empezar</button>`) : html`<button class="btn primary" disabled=${(voice ? !said.trim() : !files.length) || can == null} onClick=${read}><${Icon} n="spark" />${voice ? (said.trim() ? 'Armar el registro' : 'Primero dictá o escribí') : 'Leer la foto'}</button>`}>
+    ${voice ? html`<p class="sheet-p">Tocá el micrófono y contá lo que hiciste, como se lo contarías a un amigo. Claude arma las series y vos confirmás.</p>
+    <${MicButton} rec=${rec} onClick=${toggleMic} has=${!!said.trim()} />
+    <textarea id="voice-text" class="input voice-box" rows="6" placeholder="Lo que digas aparece acá. También podés escribirlo." value=${said} onInput=${e => setSaid(e.target.value)}></textarea>
+    <p class="muted sm">Decí el ejercicio, cuántas series, repeticiones y kilos, sin formato. Por ejemplo: “press banca 4 series de 10 con 50 kilos, después remo con mancuerna 3 de 10 con 15”. Si fue otro día, decilo (“ayer”, “el lunes”).</p>` : html`<p class="sheet-p">Sacale una foto a la pizarra del WOD, a tu planilla o a una hoja escrita. Claude la lee y te arma el entrenamiento para que lo revises.</p>`}
     ${voice ? null : html`<input ref=${inRef} id="photo-in" type="file" accept=${can && can.mediaTypes ? can.mediaTypes.join(',') : 'image/*'} multiple hidden onChange=${pick} />
     <button class="photo-drop" onClick=${() => inRef.current && inRef.current.click()} aria-label=${files.length ? 'Cambiar fotos' : 'Elegir o sacar una foto'}>
       ${urls.length ? html`<span class="photo-thumbs">${urls.map((u, i) => html`<img key=${i} src=${u} alt=${'Foto ' + (i + 1)} />`)}</span><span class="muted sm">Tocá para cambiar las fotos</span>` : html`<${Icon} n="upload" size=${28} /><b>Elegir o sacar una foto</b><span class="muted sm">${can && can.maxCount > 1 ? `Hasta ${can.maxCount} fotos (por ejemplo, las dos caras de la planilla)` : 'JPG o PNG'}</span>`}
